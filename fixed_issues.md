@@ -88,3 +88,6 @@
 
 ### 7. To install mujoco follow this guide
  - https://gist.github.com/saratrajput/60b1310fe9d9df664f9983b38b50d5da
+
+### 8. No module found robosuite.utils:
+ - Add to finetune.py "sys.path.insert(0, "/home/zhura/workspace/py_workspace/dit-policy/robosuite/robosuite/utils")"
