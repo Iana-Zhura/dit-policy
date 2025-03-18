@@ -155,18 +155,23 @@ class _DiTDecoder(nn.Module):
     ):
         super().__init__()
         self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        self.cross_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
         # Implementation of Feedforward model
         self.linear1 = nn.Linear(d_model, dim_feedforward)
         self.linear2 = nn.Linear(dim_feedforward, d_model)
 
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
+        self.norm3 = nn.LayerNorm(d_model)
 
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
         self.dropout3 = nn.Dropout(dropout)
+        self.dropout4 = nn.Dropout(dropout)
 
         self.activation = _get_activation_fn(activation)
+
+        self.cond_proj = nn.Linear(d_model, d_model)
 
         # create modulation layers
         self.attn_mod1 = _ShiftScaleMod(d_model)
@@ -179,14 +184,50 @@ class _DiTDecoder(nn.Module):
         cond = torch.mean(cond, axis=0)
         cond = cond + t
 
-        x2 = self.attn_mod1(self.norm1(x), cond)
-        x2, _ = self.self_attn(x2, x2, x2, need_weights=False)
-        x = self.attn_mod2(self.dropout1(x2), cond) + x
+        if cond.dim() == 2:  # `cond` is (seq_len, hidden_dim), needs batch dimension
+            cond = cond.unsqueeze(0).expand(x.shape[0], -1, -1)  # (batch, seq_len, hidden_dim)
 
+        # Self-Attention Block
+        x2 = self.attn_mod1(self.norm1(x), cond)
+
+        # Ensure correct shape for MultiheadAttention (seq_len, batch, hidden_dim)
+        if x2.dim() == 4:
+            x2 = x2.squeeze(0)
+        x2 = x2.permute(1, 0, 2)  
+        x2, _ = self.self_attn(x2, x2, x2, need_weights=False)
+        x2 = x2.permute(1, 0, 2)  # Convert back to (batch, seq_len, hidden_dim)
+
+        x = self.attn_mod2(self.dropout1(x2), cond) + x  # Residual connection
+
+        # Cross-Attention Block 
+        x2 = self.norm3(x)
+
+        if x2.dim() == 4:
+            x2 = x2.squeeze(0)
+
+        # Ensure correct shape for MultiheadAttention (seq_len, batch, hidden_dim)
+        x2 = x2.permute(1, 0, 2)
+        cond = cond.permute(1, 0, 2)  # Ensure `cond` is in (seq_len, batch, d_model)
+        
+        x2, _ = self.cross_attn(x2, cond, cond, need_weights=False)
+        x2 = x2.permute(1, 0, 2)  # Convert back to (batch, seq_len, hidden_dim)
+
+        x = self.dropout4(x2) + x  # Add residual connection
+
+        if x.dim() == 4:
+            x = x.squeeze(0)
+
+        if cond.shape != x.shape:
+            cond = cond.permute(1, 0, 2)  # Ensure cond is (batch, seq_len, hidden_dim)
+
+        cond = torch.mean(cond, axis=0)
+        cond = self.cond_proj(cond)  # Learnable transformation instead of mean-pooling
         x2 = self.mlp_mod1(self.norm2(x), cond)
         x2 = self.linear2(self.dropout2(self.activation(self.linear1(x2))))
         x2 = self.mlp_mod2(self.dropout3(x2), cond)
+        
         return x + x2
+
 
     def reset_parameters(self):
         for p in self.parameters():
