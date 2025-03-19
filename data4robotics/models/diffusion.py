@@ -171,8 +171,6 @@ class _DiTDecoder(nn.Module):
 
         self.activation = _get_activation_fn(activation)
 
-        self.cond_proj = nn.Linear(d_model, d_model)
-
         # create modulation layers
         self.attn_mod1 = _ShiftScaleMod(d_model)
         self.attn_mod2 = _ZeroScaleMod(d_model)
@@ -185,10 +183,10 @@ class _DiTDecoder(nn.Module):
         cond = cond + t
 
         if cond.dim() == 2:  # `cond` is (seq_len, hidden_dim), needs batch dimension
-            cond = cond.unsqueeze(0).expand(x.shape[0], -1, -1)  # (batch, seq_len, hidden_dim)
+            cond_b = cond.unsqueeze(0).expand(x.shape[0], -1, -1)  # (batch, seq_len, hidden_dim)
 
         # Self-Attention Block
-        x2 = self.attn_mod1(self.norm1(x), cond)
+        x2 = self.attn_mod1(self.norm1(x), cond_b)
 
         # Ensure correct shape for MultiheadAttention (seq_len, batch, hidden_dim)
         if x2.dim() == 4:
@@ -197,7 +195,7 @@ class _DiTDecoder(nn.Module):
         x2, _ = self.self_attn(x2, x2, x2, need_weights=False)
         x2 = x2.permute(1, 0, 2)  # Convert back to (batch, seq_len, hidden_dim)
 
-        x = self.attn_mod2(self.dropout1(x2), cond) + x  # Residual connection
+        x = self.attn_mod2(self.dropout1(x2), cond_b) + x  # Residual connection
 
         # Cross-Attention Block 
         x2 = self.norm3(x)
@@ -207,21 +205,16 @@ class _DiTDecoder(nn.Module):
 
         # Ensure correct shape for MultiheadAttention (seq_len, batch, hidden_dim)
         x2 = x2.permute(1, 0, 2)
-        cond = cond.permute(1, 0, 2)  # Ensure `cond` is in (seq_len, batch, d_model)
+        cond_b = cond_b.permute(1, 0, 2)  # Ensure `cond` is in (seq_len, batch, d_model)
         
-        x2, _ = self.cross_attn(x2, cond, cond, need_weights=False)
+        x2, _ = self.cross_attn(x2, cond_b, cond_b, need_weights=False)
         x2 = x2.permute(1, 0, 2)  # Convert back to (batch, seq_len, hidden_dim)
 
-        x = self.dropout4(x2) + x  # Add residual connection
+        # x = self.dropout4(x2) + x  # Add residual connection
 
         if x.dim() == 4:
             x = x.squeeze(0)
 
-        if cond.shape != x.shape:
-            cond = cond.permute(1, 0, 2)  # Ensure cond is (batch, seq_len, hidden_dim)
-
-        cond = torch.mean(cond, axis=0)
-        cond = self.cond_proj(cond)  # Learnable transformation instead of mean-pooling
         x2 = self.mlp_mod1(self.norm2(x), cond)
         x2 = self.linear2(self.dropout2(self.activation(self.linear1(x2))))
         x2 = self.mlp_mod2(self.dropout3(x2), cond)
