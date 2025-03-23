@@ -186,7 +186,7 @@ class _DiTDecoder(nn.Module):
             cond_b = cond.unsqueeze(0).expand(x.shape[0], -1, -1)  # (batch, seq_len, hidden_dim)
 
         # Self-Attention Block
-        x2 = self.attn_mod1(self.norm1(x), cond_b)
+        x2 = self.attn_mod1(self.norm1(x), cond)
 
         # Ensure correct shape for MultiheadAttention (seq_len, batch, hidden_dim)
         if x2.dim() == 4:
@@ -195,7 +195,7 @@ class _DiTDecoder(nn.Module):
         x2, _ = self.self_attn(x2, x2, x2, need_weights=False)
         x2 = x2.permute(1, 0, 2)  # Convert back to (batch, seq_len, hidden_dim)
 
-        x = self.attn_mod2(self.dropout1(x2), cond_b) + x  # Residual connection
+        x = self.attn_mod2(self.dropout1(x2), cond) + x  # Residual connection
 
         # Cross-Attention Block 
         x2 = self.norm3(x)
@@ -214,6 +214,7 @@ class _DiTDecoder(nn.Module):
 
         if x.dim() == 4:
             x = x.squeeze(0)
+
 
         x2 = self.mlp_mod1(self.norm2(x), cond)
         x2 = self.linear2(self.dropout2(self.activation(self.linear1(x2))))
